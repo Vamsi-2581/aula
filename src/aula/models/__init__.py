@@ -21,6 +21,7 @@ from .group import GroupMember as GroupMember
 from .library import LibraryLoan as LibraryLoan
 from .library import LibraryStatus as LibraryStatus
 from .meebook_weekplan import MeebookStudentPlan as MeebookStudentPlan
+from .meeting_booking import MeetingBooking as MeetingBooking
 from .message import Message as Message
 from .message_folder import MessageFolder as MessageFolder
 from .message_thread import MessageThread as MessageThread
