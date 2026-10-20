@@ -2,7 +2,7 @@
 
 import asyncio
 import inspect
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1259,6 +1259,106 @@ class TestGetCalendarEvents:
         c._access_token = None
         c._csrf_token = "csrf"
         return c
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("start", "end"),
+        [
+            (datetime(2026, 3, 2), datetime(2026, 3, 1)),
+            (
+                datetime(2026, 3, 2, tzinfo=timezone(timedelta(hours=14))),
+                datetime(2026, 3, 1, tzinfo=timezone(timedelta(hours=-12))),
+            ),
+        ],
+        ids=["naive", "local-dates-reversed-despite-ordered-instants"],
+    )
+    async def test_reversed_dates_raise_before_http_request(self, start, end):
+        http_client = AsyncMock()
+        http_client.request.return_value = HttpResponse(status_code=200, data={"data": []})
+        client = AulaApiClient(http_client=http_client, access_token="test_token")
+
+        with pytest.raises(ValueError, match="start date.*end date"):
+            await client.get_calendar_events([100], start, end)
+
+        http_client.request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("start", "end", "expected_start", "expected_end"),
+        [
+            (
+                "2026-03-01T12:30:00",
+                "2026-03-02T09:15:00",
+                "2026-03-01 00:00:00.0000",
+                "2026-03-02 23:59:59.0000",
+            ),
+            (
+                "2026-03-01T09:00:00+01:00",
+                "2026-03-01T17:00:00+01:00",
+                "2026-03-01 00:00:00.0000+0100",
+                "2026-03-01 23:59:59.0000+0100",
+            ),
+            (
+                "2026-03-01T23:00:00",
+                "2026-03-01T01:00:00",
+                "2026-03-01 00:00:00.0000",
+                "2026-03-01 23:59:59.0000",
+            ),
+            (
+                "2026-03-01T23:00:00-12:00",
+                "2026-03-02T00:00:00+14:00",
+                "2026-03-01 00:00:00.0000-1200",
+                "2026-03-02 23:59:59.0000+1400",
+            ),
+            (
+                "2026-03-01T23:00:00+01:00",
+                "2026-03-01T01:00:00",
+                "2026-03-01 00:00:00.0000+0100",
+                "2026-03-01 23:59:59.0000",
+            ),
+        ],
+        ids=[
+            "ordered-naive",
+            "same-day-aware",
+            "same-day-reversed-times",
+            "ordered-local-dates-despite-reversed-instants",
+            "mixed-awareness",
+        ],
+    )
+    async def test_valid_dates_preserve_whole_day_request_and_parse_events(
+        self, start, end, expected_start, expected_end
+    ):
+        http_client = AsyncMock()
+        http_client.request.return_value = HttpResponse(
+            status_code=200,
+            data={
+                "data": [
+                    {
+                        "id": 1,
+                        "title": "Math",
+                        "startDateTime": "2026-03-01T08:00:00+01:00",
+                        "endDateTime": "2026-03-01T09:00:00+01:00",
+                        "belongsToProfiles": [100],
+                    }
+                ]
+            },
+        )
+        client = AulaApiClient(http_client=http_client, access_token="test_token")
+
+        events = await client.get_calendar_events(
+            [100], datetime.fromisoformat(start), datetime.fromisoformat(end)
+        )
+
+        assert len(events) == 1
+        assert events[0].id == 1
+        assert events[0].title == "Math"
+        http_client.request.assert_awaited_once()
+        assert http_client.request.call_args.kwargs["json"] == {
+            "instProfileIds": [100],
+            "resourceIds": [],
+            "start": expected_start,
+            "end": expected_end,
+        }
 
     @pytest.mark.asyncio
     async def test_happy_path_with_lesson(self, client):
