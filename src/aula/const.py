@@ -49,6 +49,9 @@ EASYIQ_WEEKPLAN_WIDGETS = (
 # with the same parameters (scaarup/aula#364, verified live 2026-08-11).
 MIN_UDDANNELSE_TASK_WIDGETS = (WIDGET_MIN_UDDANNELSE_TASKS, WIDGET_MIN_UDDANNELSE_SSO)
 
+# The SSO widget also supplies tokens for /ugebrev at schools without Ugenoter.
+MIN_UDDANNELSE_UGEPLAN_WIDGETS = (WIDGET_MIN_UDDANNELSE_UGEPLAN, WIDGET_MIN_UDDANNELSE_SSO)
+
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"  # noqa: E501
 
 # Auth endpoints (validated against Android app network traffic)
