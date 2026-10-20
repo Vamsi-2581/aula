@@ -688,10 +688,9 @@ class MitIDAuthClient:
 
             auth_code = query_params["code"][0]
 
-            if "state" in query_params:
-                returned_state = query_params["state"][0]
-                if returned_state != self._state:
-                    raise OAuthError("State parameter mismatch")
+            returned_state = query_params.get("state", [""])[0]
+            if not returned_state or returned_state != self._state:
+                raise OAuthError("Missing or mismatched state parameter")
 
             token_url = f"{AUTH_BASE_URL}{OAUTH_TOKEN_PATH}"
 
