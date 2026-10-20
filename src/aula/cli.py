@@ -22,11 +22,11 @@ from .config import CONFIG_FILE, DEFAULT_TOKEN_FILE, load_config, save_config
 from .const import (
     EASYIQ_WEEKPLAN_WIDGETS,
     MIN_UDDANNELSE_TASK_WIDGETS,
+    MIN_UDDANNELSE_UGEPLAN_WIDGETS,
     WIDGET_BIBLIOTEKET,
     WIDGET_EASYIQ_HOMEWORK,
     WIDGET_HUSKELISTEN,
     WIDGET_MEEBOOK,
-    WIDGET_MIN_UDDANNELSE_UGEPLAN,
 )
 from .models import (
     Child,
@@ -1988,9 +1988,10 @@ async def mu_ugeplan(ctx, week):
     """Fetch Min Uddannelse weekly plans (ugebreve) for children."""
     week = _resolve_week(week)
     async with await _get_client(ctx) as client:
-        if not await _require_widget(
-            client, WIDGET_MIN_UDDANNELSE_UGEPLAN, "MinUddannelse Ugenoter"
-        ):
+        widget_id = await _require_any_widget(
+            client, MIN_UDDANNELSE_UGEPLAN_WIDGETS, "MinUddannelse Ugenoter"
+        )
+        if widget_id is None:
             return
 
         try:
@@ -2012,7 +2013,7 @@ async def mu_ugeplan(ctx, week):
 
         try:
             personer = await client.widgets.get_ugeplan(
-                WIDGET_MIN_UDDANNELSE_UGEPLAN,
+                widget_id,
                 child_filter,
                 institution_filter,
                 week,
@@ -3070,12 +3071,15 @@ async def weekly_summary(ctx, child, week, providers):
                 click.echo()
 
         # ── Min Uddannelse – Weekly Letter (Ugeplan) ─────────────────────────
-        if WeeklySummaryProvider.MU_UGEPLAN in enabled and await _has_widget(
-            client, WIDGET_MIN_UDDANNELSE_UGEPLAN
-        ):
+        mu_ugeplan_widget = (
+            await _first_available_widget(client, MIN_UDDANNELSE_UGEPLAN_WIDGETS)
+            if WeeklySummaryProvider.MU_UGEPLAN in enabled
+            else None
+        )
+        if mu_ugeplan_widget is not None:
             try:
                 mu_persons = await client.widgets.get_ugeplan(
-                    WIDGET_MIN_UDDANNELSE_UGEPLAN,
+                    mu_ugeplan_widget,
                     child_filter,
                     institution_filter,
                     week,
