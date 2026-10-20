@@ -768,6 +768,7 @@ class MitIDAuthClient:
                 raise OAuthError(f"Token refresh failed: {response.status_code}")
 
             tokens = response.json()
+            tokens.setdefault("refresh_token", refresh_token)
 
             if "expires_in" in tokens:
                 tokens["expires_at"] = time.time() + tokens["expires_in"]
