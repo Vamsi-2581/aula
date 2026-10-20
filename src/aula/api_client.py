@@ -1126,7 +1126,14 @@ class AulaApiClient:
     async def get_calendar_events(
         self, institution_profile_ids: list[int], start: datetime, end: datetime
     ) -> list[CalendarEvent]:
-        """Fetch calendar events for the given profiles and date range."""
+        """Fetch events for inclusive whole days, preserving each bound's timezone.
+
+        Time components are ignored. Raise ValueError before making a request
+        if the start date is after the end date.
+        """
+        if start.date() > end.date():
+            raise ValueError("start date must be on or before end date")
+
         data = {
             "instProfileIds": institution_profile_ids,
             "resourceIds": [],
