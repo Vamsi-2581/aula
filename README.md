@@ -217,9 +217,21 @@ It tries every thread given and exits with a non-zero code if any was not marked
 | Command | Description |
 |---|---|
 | `aula calendar` | Calendar events |
+| `aula meetings` | Booked parent meetings at their selected times (next 100 days) |
 | `aula important-dates` | Important dates |
 | `aula birthdays` | Birthday events |
 | `aula vacations` | Vacation registrations |
+
+`aula meetings --child-id 12345 --start-date 2026-11-01 --end-date 2026-12-01`
+shows that child's booked parent meetings in November. The end date is exclusive;
+without `--child-id`, all children are included. Text times use Europe/Copenhagen.
+JSON output includes the child, meeting ID, location and exact booked timestamps.
+
+The Python API is `await client.get_meeting_bookings(child.id, start, end)`, with
+timezone-aware datetime bounds and an exclusive end. It returns `MeetingBooking`
+models for actual appointments, excluding unbooked invitations and other children's
+answers. Long ranges are fetched in chunks; a rejected request raises instead of
+returning a partial list.
 
 ### Presence
 

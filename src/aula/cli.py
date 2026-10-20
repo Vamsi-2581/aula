@@ -1917,6 +1917,65 @@ def print_mu_task_tables(tasks: Sequence[MUTask]) -> None:
             click.echo(f"  [{number}] {link}")
 
 
+@cli.command("meetings")
+@click.option(
+    "--child-id", type=int, multiple=True, help="Child institution profile ID; repeatable."
+)
+@click.option("--start-date", type=click.DateTime(formats=["%Y-%m-%d"]), default=None)
+@click.option(
+    "--end-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Exclusive end date. Defaults to 100 days after the start date.",
+)
+@click.pass_context
+@async_cmd
+async def meetings(ctx, child_id, start_date, end_date):
+    """Show booked parent meetings for children, from today by default."""
+    zone = ZoneInfo("Europe/Copenhagen")
+    start = (
+        start_date.replace(tzinfo=zone)
+        if start_date
+        else datetime.datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    )
+    end = end_date.replace(tzinfo=zone) if end_date else start + datetime.timedelta(days=100)
+    if end <= start:
+        raise click.BadParameter("must be after the start date", param_hint="--end-date")
+    async with await _get_client(ctx) as client:
+        try:
+            profile = await client.get_profile()
+            children = [child for child in profile.children if not child_id or child.id in child_id]
+            unknown = set(child_id) - {child.id for child in profile.children}
+            if unknown:
+                raise click.BadParameter(
+                    f"unknown child ID(s): {', '.join(map(str, sorted(unknown)))}",
+                    param_hint="--child-id",
+                )
+            rows = []
+            for child in children:
+                bookings = await client.get_meeting_bookings(child.id, start, end)
+                rows.extend({**dict(booking), "child_name": child.name} for booking in bookings)
+        except click.BadParameter:
+            raise
+        except Exception as exc:
+            raise click.ClickException(f"fetching booked meetings: {exc}") from exc
+
+    rows.sort(key=lambda row: row["start_datetime"])
+    if output_json(ctx, rows):
+        return
+    if not rows:
+        print_empty("booked meetings")
+        return
+    print_heading("Booked meetings")
+    for row in rows:
+        beginning = row["start_datetime"].astimezone(zone)
+        ending = row["end_datetime"].astimezone(zone)
+        click.echo(f"{row['child_name']}: {row['title']}")
+        click.echo(f"  {beginning:%Y-%m-%d %H:%M %Z} – {ending:%Y-%m-%d %H:%M %Z}")
+        if row["location"]:
+            click.echo(f"  Location: {row['location']}")
+
+
 @cli.command("mu:opgaver")
 @click.option(
     "--week",

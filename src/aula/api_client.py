@@ -6,7 +6,7 @@ import time
 import warnings
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import TracebackType
 from typing import Any, Self
 from urllib.parse import parse_qs, urlparse
@@ -42,6 +42,7 @@ from .models import (
     GroupMember,
     LibraryStatus,
     MeebookStudentPlan,
+    MeetingBooking,
     Message,
     MessageFolder,
     MessageThread,
@@ -64,6 +65,7 @@ from .models import (
     WidgetConfiguration,
     merge_duplicate_lessons,
 )
+from .models.meeting_booking import meeting_bookings
 from .utils.mapping import get_in
 from .widgets import AulaWidgetsClient
 
@@ -1182,6 +1184,54 @@ class AulaApiClient:
                 continue
 
         return merge_duplicate_lessons(events)
+
+    async def get_meeting_bookings(
+        self, child_id: int, start: datetime, end: datetime
+    ) -> list[MeetingBooking]:
+        """Fetch a child's booked parent meetings overlapping [start, end).
+
+        Use Child.id (institution profile ID) and timezone-aware bounds. Returns
+        actual appointments rather than the calendar row's booking period.
+        Requests span at most 49 days, below the reported 50-day calendar limit
+        even across a daylight-saving change. A failed chunk raises instead of
+        returning an incomplete list. The ordinary calendar API is unchanged.
+        """
+        if start.utcoffset() is None or end.utcoffset() is None:
+            raise ValueError("Meeting bounds must be timezone-aware")
+        if end <= start:
+            raise ValueError("Meeting end must be after start")
+        rows: list[dict[str, Any]] = []
+        cursor = start
+        while cursor < end:
+            chunk_end = min(cursor + timedelta(days=49), end)
+            resp = await self._request_with_version_retry(
+                "post",
+                f"{self.api_url}?method=calendar.getEventsByProfileIdsAndResourceIds",
+                json={
+                    "instProfileIds": [child_id],
+                    "resourceIds": [],
+                    "start": cursor.strftime("%Y-%m-%d %H:%M:%S.%f%z"),
+                    "end": chunk_end.strftime("%Y-%m-%d %H:%M:%S.%f%z"),
+                },
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            if not isinstance(body, dict) or get_in(body, "status.code") != 0:
+                raise HttpRequestError(
+                    "Aula rejected the meeting calendar request", resp.status_code
+                )
+            data = body.get("data")
+            if not isinstance(data, list):
+                raise HttpRequestError(
+                    "Aula returned invalid meeting calendar data", resp.status_code
+                )
+            rows.extend(data)
+            cursor = chunk_end
+        return [
+            booking
+            for booking in meeting_bookings(rows, child_id)
+            if booking.end_datetime > start and booking.start_datetime < end
+        ]
 
     async def get_calendar_event(
         self, event_id: int, occurrence_datetime: str | None = None
