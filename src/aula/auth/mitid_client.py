@@ -28,6 +28,7 @@ from ..const import (
     STIL_SECURITY_CHECK_HOST,
     USER_AGENT,
 )
+from ..utils.diagnostics import diagnostic_url
 from .browser_client import BrowserClient
 from .exceptions import (
     MitIDAuthError,
@@ -260,7 +261,7 @@ class MitIDAuthClient:
 
             if response.is_redirect:
                 redirect_url = response.headers.get("Location")
-                _LOGGER.debug("OAuth redirecting to: %s", redirect_url)
+                _LOGGER.debug("OAuth redirecting to: %s", diagnostic_url(redirect_url))
                 return redirect_url
 
             if response.is_success:
@@ -289,7 +290,7 @@ class MitIDAuthClient:
                     "Redirect %d: HTTP %d → %s",
                     redirect_count,
                     response.status_code,
-                    response.url,
+                    diagnostic_url(response.url),
                 )
 
                 if response.is_success:
@@ -331,14 +332,14 @@ class MitIDAuthClient:
         """Handle the broker page for MitID selection."""
         action, form_data = _extract_form_data(soup)
 
-        _LOGGER.debug("Submitting MitID selection form to %s", action)
+        _LOGGER.debug("Submitting MitID selection form to %s", diagnostic_url(action))
         form_data["selectedIdp"] = "nemlogin3"
 
         post_response = await self._client.post(action, data=form_data)
 
         if post_response.is_redirect and "Location" in post_response.headers:
             current_url = post_response.headers["Location"]
-            _LOGGER.debug("IdP selection redirected to: %s", current_url)
+            _LOGGER.debug("IdP selection redirected to: %s", diagnostic_url(current_url))
             return await self._step2_follow_redirect_to_mitid(current_url)
 
         raise SAMLError("Could not find working IdP selection method")
@@ -477,7 +478,9 @@ class MitIDAuthClient:
                 response = await self._handle_login_option_page(response)
 
             _LOGGER.debug(
-                "MitID completion landed on %s (HTTP %s)", response.url, response.status_code
+                "MitID completion landed on %s (HTTP %s)",
+                diagnostic_url(response.url),
+                response.status_code,
             )
             soup = BeautifulSoup(response.text, features="html.parser")
 
@@ -485,13 +488,18 @@ class MitIDAuthClient:
             saml_response_input = soup.find("input", {"name": "SAMLResponse"})
 
             if not isinstance(relay_state_input, Tag) or not isinstance(saml_response_input, Tag):
-                _LOGGER.debug("Page without SAML form:\n%s", response.text)
+                _LOGGER.debug(
+                    "Page without complete SAML form (HTTP %s, forms=%d, inputs=%d)",
+                    response.status_code,
+                    len(soup.find_all("form")),
+                    len(soup.find_all("input")),
+                )
                 message = _page_message(soup)
                 detail = f' Page says: "{message}".' if message else ""
                 raise SAMLError(
                     "Could not find SAML data in MitID completion response "
                     f"(landed on {response.url.path}, HTTP {response.status_code})."
-                    f"{detail} Re-run with -vvv to log the page that was returned."
+                    f"{detail} Re-run with -vvv for diagnostic context."
                 )
 
             return {
@@ -585,7 +593,7 @@ class MitIDAuthClient:
 
     async def _process_broker_response(self, response: httpx.Response) -> dict[str, str]:
         """Process broker response and extract SAML for Aula."""
-        _LOGGER.debug("Processing broker response from URL: %s", response.url)
+        _LOGGER.debug("Processing broker response from URL: %s", diagnostic_url(response.url))
 
         soup = BeautifulSoup(response.text, "html.parser")
         action, form_data = _extract_form_data(soup)

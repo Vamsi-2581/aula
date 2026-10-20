@@ -155,6 +155,10 @@ The check does not fire for everyone. Every report so far comes from outside Den
 
 Tokens provide full access to your Aula account — treat them like passwords and never commit token files to version control.
 
+Application diagnostics redact recognized credential fields and URL query values,
+and omit raw authentication HTML. This does not anonymize personal content:
+debug logs can still contain school data and should be reviewed before sharing.
+
 ### How It Works
 
 For a detailed breakdown of the authentication flow (OAuth + SAML + MitID), session cookies, and how this library differs from the browser login, see [docs/aula-authentication.md](docs/aula-authentication.md).
