@@ -11,6 +11,7 @@ import pytest
 from aula.api_client import AulaApiClient
 from aula.auth.exceptions import SAMLError
 from aula.auth.mitid_client import MitIDAuthClient
+from aula.auth_flow import authenticate
 from aula.http import HttpResponse
 
 
@@ -79,3 +80,44 @@ async def test_failed_completion_does_not_log_hidden_authentication_html(caplog)
         assert marker not in caplog.text
     assert "HTTP 200" in caplog.text
     assert "SAML" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_post_reader_diagnostics_sanitize_nested_credentials(caplog):
+    payload = {
+        "data": {
+            "posts": [
+                {
+                    "id": 1,
+                    "title": "Example",
+                    "Authorization": "post-marker",
+                    "nested": [{"Set-Cookie": "nested-marker"}],
+                }
+            ]
+        }
+    }
+    original = copy.deepcopy(payload)
+    http = AsyncMock()
+    http.request.return_value = HttpResponse(200, payload)
+    with caplog.at_level(logging.DEBUG, logger="aula"):
+        await AulaApiClient(http).get_posts([1])
+    assert "post-marker" not in caplog.text
+    assert "nested-marker" not in caplog.text
+    assert "Processing post" in caplog.text
+    assert payload == original
+
+
+@pytest.mark.asyncio
+async def test_authentication_failure_logs_do_not_repeat_url_credentials(caplog):
+    redirect = "https://example.test/unexpected?code=failure-marker"
+
+    def endpoint(request):
+        if request.url.host == "example.test":
+            return httpx.Response(200, text="Unexpected page")
+        return httpx.Response(302, headers={"Location": redirect})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(endpoint)) as http:
+        with caplog.at_level(logging.DEBUG, logger="aula"), pytest.raises(RuntimeError):
+            await authenticate("tester", httpx_client=http)
+    assert "failure-marker" not in caplog.text
+    assert "Authentication failed" in caplog.text

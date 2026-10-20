@@ -4,7 +4,6 @@ import base64
 import binascii
 import hashlib
 import json
-import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
@@ -28,7 +27,7 @@ from ..const import (
     STIL_SECURITY_CHECK_HOST,
     USER_AGENT,
 )
-from ..utils.diagnostics import diagnostic_url
+from ..utils.diagnostics import credential_logger, diagnostic_url
 from .browser_client import BrowserClient
 from .exceptions import (
     MitIDAuthError,
@@ -39,7 +38,7 @@ from .exceptions import (
     SecurityCheckError,
 )
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = credential_logger(__name__)
 
 # The full challenge URL carries a long opaque ``data=`` blob, so keep it out of
 # the message and leave it to the redirect chain debug log.
@@ -314,7 +313,7 @@ class MitIDAuthClient:
                             "mitid_url": str(response.url),
                         }
 
-                    raise SAMLError(f"Unexpected page reached: {response.url}")
+                    raise SAMLError(f"Unexpected page reached: {diagnostic_url(response.url)}")
 
                 if response.is_redirect:
                     if "Location" not in response.headers:
@@ -677,7 +676,9 @@ class MitIDAuthClient:
             elif redirect_response.is_success:
                 if APP_REDIRECT_URI in response_url and "code=" in response_url:
                     return response_url
-                raise OAuthError(f"Did not receive OAuth callback URL. Final: {response_url}")
+                raise OAuthError(
+                    f"Did not receive OAuth callback URL. Final: {diagnostic_url(response_url)}"
+                )
             else:
                 raise OAuthError(f"Unexpected status: {redirect_response.status_code}")
 

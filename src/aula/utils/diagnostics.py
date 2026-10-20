@@ -1,5 +1,6 @@
 """Credential redaction for diagnostic copies, without modifying wire data."""
 
+import logging
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -45,6 +46,8 @@ def diagnostic_url(url: object) -> str:
 
 def redact_credentials(value: Any) -> Any:
     """Copy nested structures, replacing recognized credential fields before logging."""
+    if isinstance(value, BaseException):
+        return type(value).__name__
     if isinstance(value, dict):
         return {
             key: "[redacted]"
@@ -57,3 +60,26 @@ def redact_credentials(value: Any) -> Any:
     if isinstance(value, str) and "://" in value:
         return diagnostic_url(value)
     return value
+
+
+class _CredentialFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Reader parsing warnings and authentication failure logs must use the
+        # same redaction as the common response diagnostic. Keep format args
+        # separate so formatting cannot turn a nested secret into plain text.
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact_credentials(arg) for arg in record.args)
+        elif isinstance(record.args, dict):
+            record.args = redact_credentials(record.args)
+        if record.exc_info and record.exc_info[0]:
+            record.exc_text = record.exc_info[0].__name__
+            record.exc_info = None
+        return True
+
+
+def credential_logger(name: str) -> logging.Logger:
+    """Build an application logger that sanitizes diagnostic arguments."""
+    logger = logging.getLogger(name)
+    if not any(isinstance(filter_, _CredentialFilter) for filter_ in logger.filters):
+        logger.addFilter(_CredentialFilter())
+    return logger
