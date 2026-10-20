@@ -1,15 +1,15 @@
 import dataclasses
-import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..utils.diagnostics import credential_logger
 from .base import AulaDataClass
 from .institution_profile import InstitutionProfile
 from .main_group import MainGroup
 from .presence import PresenceState
 from .presence_location import PresenceLocation
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = credential_logger(__name__)
 
 # Sleep intervals from the API are dicts with string keys (e.g. start/end times).
 # The exact shape is undocumented, so we use dict[str, str] as the best known type.

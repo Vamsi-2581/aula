@@ -1,15 +1,15 @@
 import base64
 import binascii
-import logging
 import re
 import urllib.parse
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from ..utils.diagnostics import credential_logger
 from .base import AulaDataClass
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = credential_logger(__name__)
 
 
 def decode_mu_deep_link(url: str | None) -> str | None:

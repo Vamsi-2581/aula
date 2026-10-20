@@ -121,3 +121,16 @@ async def test_authentication_failure_logs_do_not_repeat_url_credentials(caplog)
             await authenticate("tester", httpx_client=http)
     assert "failure-marker" not in caplog.text
     assert "Authentication failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_model_parsing_warnings_redact_credentials_at_reader_entry_point(caplog):
+    payload = {"data": [{"location": [{"Authorization": "model-marker"}]}]}
+    original = copy.deepcopy(payload)
+    http = AsyncMock()
+    http.request.return_value = HttpResponse(200, payload)
+    with caplog.at_level(logging.DEBUG, logger="aula"):
+        await AulaApiClient(http).get_daily_overview(1)
+    assert "model-marker" not in caplog.text
+    assert "Unexpected location" in caplog.text
+    assert payload == original

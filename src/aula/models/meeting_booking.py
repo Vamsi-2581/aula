@@ -1,14 +1,14 @@
 """Booked intervals for Aula's parent meetings."""
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from ..utils.diagnostics import credential_logger
 from ..utils.mapping import get_in
 from .base import AulaDataClass
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = credential_logger(__name__)
 MEETING_TYPES = frozenset({"school_home_meeting", "parental_meeting"})
 
 
