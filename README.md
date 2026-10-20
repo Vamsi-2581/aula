@@ -216,6 +216,29 @@ thread that holds only events is returned unmarked and makes the command exit 1.
 Only threads in your own mailbox are handled; common and OTP inboxes are refused.
 It tries every thread given and exits with a non-zero code if any was not marked.
 
+For exhaustive reads, use `search_messages_result()`,
+`get_all_message_threads_result(cutoff_date)`, or
+`get_all_messages_for_thread_result(thread_id)`. Each returns `PaginationResult`
+with `items`, `complete`, and `termination_reason`. The existing list methods
+remain available and warn when returning partial results. Records with stable IDs
+are deduplicated in first-seen order.
+
+| Termination reason | Complete | Meaning |
+| --- | --- | --- |
+| `exhausted` | Yes | Exhaustion without contradictory available totals |
+| `cutoff` | Yes | Requested thread date cutoff reached |
+| `max_pages` | No | Safety cap reached |
+| `no_progress` | No | Repeated page or no new identifiable records |
+| `inconsistent_total` | No | Available totals disagree with observed results |
+
+Request failures still raise, including on later pages. `aula messages --search`
+returns a JSON object containing these three fields instead of a bare list.
+Incomplete searches print a warning in text mode and exit 1 in both modes.
+Message image exports report incomplete searches/thread reads through progress
+messages and an optional `on_incomplete` callback while preserving their
+`(downloaded, skipped)` return tuple. The download CLI includes `message_export`
+completeness and issues in JSON, and exits 1 for incomplete message exports.
+
 ### Calendar
 
 | Command | Description |

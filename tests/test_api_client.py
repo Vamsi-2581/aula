@@ -942,7 +942,7 @@ class TestPaginationSafetyGuards:
         return AulaApiClient(http_client=http_client, access_token="test_token")
 
     @pytest.mark.asyncio
-    async def test_get_all_message_threads_respects_max_pages(self, client):
+    async def test_get_all_message_threads_stops_repeated_pages_within_max_pages(self, client):
         """get_all_message_threads stops at MAX_PAGES."""
         # Return threads with recent dates so cutoff never triggers
         client._request_with_version_retry = AsyncMock(
@@ -957,11 +957,11 @@ class TestPaginationSafetyGuards:
         with patch("aula.api_client.MAX_PAGES", 3):
             result = await client.get_all_message_threads(date(2020, 1, 1))
 
-        assert client._request_with_version_retry.call_count == 3
-        assert len(result) == 3
+        assert client._request_with_version_retry.call_count == 2
+        assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_get_all_messages_for_thread_respects_max_pages(self, client):
+    async def test_get_all_messages_for_thread_stops_repeated_pages_within_max_pages(self, client):
         """get_all_messages_for_thread stops at MAX_PAGES."""
         client._request_with_version_retry = AsyncMock(
             return_value=HttpResponse(
@@ -973,11 +973,11 @@ class TestPaginationSafetyGuards:
         with patch("aula.api_client.MAX_PAGES", 3):
             result = await client.get_all_messages_for_thread("t1")
 
-        assert client._request_with_version_retry.call_count == 3
-        assert len(result) == 3
+        assert client._request_with_version_retry.call_count == 2
+        assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_search_messages_respects_max_pages(self, client):
+    async def test_search_messages_stops_repeated_pages_within_max_pages(self, client):
         """search_messages stops at MAX_PAGES."""
         # Return results that never exhaust totalSize so pagination continues
         client._request_with_version_retry = AsyncMock(
@@ -1000,8 +1000,8 @@ class TestPaginationSafetyGuards:
                 limit=1,
             )
 
-        assert client._request_with_version_retry.call_count == 3
-        assert len(result) == 3
+        assert client._request_with_version_retry.call_count == 2
+        assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_get_all_message_threads_stops_on_empty(self, client):

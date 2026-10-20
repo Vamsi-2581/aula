@@ -66,8 +66,10 @@ from .models import (
     merge_duplicate_lessons,
 )
 from .models.meeting_booking import meeting_bookings
+from .models.pagination import PaginationResult
 from .utils.diagnostics import credential_logger, redact_credentials
 from .utils.mapping import get_in
+from .utils.pagination import PaginationState
 from .widgets import AulaWidgetsClient
 
 # Logger
@@ -1825,25 +1827,41 @@ class AulaApiClient:
         has_attachments: bool | None = None,
         limit: int = 100,
     ) -> list[Message]:
-        """Search messages using search.findMessage with server-side filtering.
+        """Search all messages; use search_messages_result() for completeness.
 
-        ``institution_profile_ids`` must only contain the children's
-        institution profile IDs (not the parent's), otherwise the API returns 403.
-
-        Paginates automatically to fetch all matching results.
+        Profile IDs must contain children only, as including a parent can
+        cause Aula to reject the request. ``limit`` is the page size.
         """
-        all_messages: list[Message] = []
+        result = await self.search_messages_result(
+            institution_profile_ids,
+            institution_codes,
+            text=text,
+            from_date=from_date,
+            to_date=to_date,
+            has_attachments=has_attachments,
+            limit=limit,
+        )
+        self._warn_incomplete("search_messages", result)
+        return result.items
+
+    async def search_messages_result(
+        self,
+        institution_profile_ids: list[int],
+        institution_codes: list[str],
+        *,
+        text: str = "",
+        from_date: date | None = None,
+        to_date: date | None = None,
+        has_attachments: bool | None = None,
+        limit: int = 100,
+    ) -> PaginationResult[Message]:
+        """Search messages with completeness metadata; limit is a positive page size."""
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        state = PaginationState()
         offset = 0
-        pages_fetched = 0
-
-        while True:
-            if pages_fetched >= MAX_PAGES:
-                _LOGGER.warning(
-                    "search_messages hit MAX_PAGES limit (%d), returning partial results",
-                    MAX_PAGES,
-                )
-                break
-
+        reason = "max_pages"
+        for _page in range(MAX_PAGES):
             payload = {
                 "text": text,
                 "typeahead": False,
@@ -1872,79 +1890,97 @@ class AulaApiClient:
             )
             resp.raise_for_status()
             data = resp.json().get("data") or {}
-            results = data.get("results", [])
-            if not results:
+            state.observe_total(data)
+            rows = data.get("results", [])
+            if not rows:
+                reason = "exhausted"
                 break
-
-            for msg_dict in results:
-                all_messages.append(Message.from_dict(msg_dict))
-
-            total = data.get("totalSize", 0)
+            if not state.add(rows):
+                reason = "no_progress"
+                break
             offset += limit
-            pages_fetched += 1
-
-            if offset >= total or len(results) < limit:
+            if (state.total is not None and offset >= state.total) or len(rows) < limit:
+                reason = "exhausted"
                 break
+        result = state.result(reason)
+        return PaginationResult(
+            [Message.from_dict(row) for row in result.items],
+            result.complete,
+            result.termination_reason,
+        )
 
-        return all_messages
+    @staticmethod
+    def _warn_incomplete(operation: str, result: PaginationResult) -> None:
+        if not result.complete:
+            _LOGGER.warning(
+                "%s returning partial results (%s, MAX_PAGES=%d)",
+                operation,
+                result.termination_reason,
+                MAX_PAGES,
+            )
 
     async def get_all_message_threads(self, cutoff_date: date) -> list[dict]:
-        """Paginate messaging.getThreads until threads are older than cutoff_date."""
-        all_threads: list[dict] = []
-        page = 0
-        while page < MAX_PAGES:
+        """Read threads in first-seen order; warn if the read is incomplete."""
+        result = await self.get_all_message_threads_result(cutoff_date)
+        self._warn_incomplete("get_all_message_threads", result)
+        return result.items
+
+    async def get_all_message_threads_result(self, cutoff_date: date) -> PaginationResult[dict]:
+        """Read threads until a date cutoff, with explicit completeness metadata."""
+        state = PaginationState()
+        for page in range(MAX_PAGES):
             resp = await self._request_with_version_retry(
                 "get",
                 f"{self.api_url}?method=messaging.getThreads&sortOn=date&orderDirection=desc&page={page}",
             )
             resp.raise_for_status()
-            threads = get_in(resp.json(), "data.threads", default=[])
+            data = resp.json().get("data") or {}
+            state.observe_total(data)
+            threads = data.get("threads", [])
             if not threads:
-                break
-
-            for t in threads:
-                last_date_str = t.get("lastMessageDate") or t.get("lastUpdatedDate", "")
-                if last_date_str:
+                return state.result("exhausted")
+            eligible = []
+            cutoff_reached = False
+            for thread in threads:
+                timestamp = thread.get("lastMessageDate") or thread.get("lastUpdatedDate", "")
+                if timestamp:
                     try:
-                        thread_date = datetime.fromisoformat(last_date_str).date()
-                        if thread_date < cutoff_date:
-                            return all_threads
+                        cutoff_reached = datetime.fromisoformat(timestamp).date() < cutoff_date
                     except ValueError, TypeError:
-                        pass
-                all_threads.append(t)
-
-            page += 1
-        else:
-            _LOGGER.warning(
-                "get_all_message_threads hit MAX_PAGES limit (%d), returning partial results",
-                MAX_PAGES,
-            )
-
-        return all_threads
+                        cutoff_reached = False
+                if cutoff_reached:
+                    break
+                eligible.append(thread)
+            progressed = state.add(eligible) if eligible else False
+            if cutoff_reached:
+                return state.result("cutoff")
+            if not progressed:
+                return state.result("no_progress")
+        return state.result("max_pages")
 
     async def get_all_messages_for_thread(self, thread_id: str) -> list[dict]:
-        """Paginate messaging.getMessagesForThread to get all messages."""
-        all_messages: list[dict] = []
-        page = 0
-        while page < MAX_PAGES:
+        """Read all thread messages; warn if the read is incomplete."""
+        result = await self.get_all_messages_for_thread_result(thread_id)
+        self._warn_incomplete("get_all_messages_for_thread", result)
+        return result.items
+
+    async def get_all_messages_for_thread_result(self, thread_id: str) -> PaginationResult[dict]:
+        """Read a thread's full history with explicit completeness metadata."""
+        state = PaginationState()
+        for page in range(MAX_PAGES):
             resp = await self._request_with_version_retry(
                 "get",
                 f"{self.api_url}?method=messaging.getMessagesForThread&threadId={thread_id}&page={page}",
             )
             resp.raise_for_status()
-            messages = get_in(resp.json(), "data.messages", default=[])
+            data = resp.json().get("data") or {}
+            state.observe_total(data)
+            messages = data.get("messages", [])
             if not messages:
-                break
-
-            all_messages.extend(messages)
-            page += 1
-        else:
-            _LOGGER.warning(
-                "get_all_messages_for_thread hit MAX_PAGES limit (%d), returning partial results",
-                MAX_PAGES,
-            )
-
-        return all_messages
+                return state.result("exhausted")
+            if not state.add(messages):
+                return state.result("no_progress")
+        return state.result("max_pages")
 
     async def download_file(self, url: str) -> bytes:
         """Download a file as raw bytes."""
