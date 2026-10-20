@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -499,3 +500,92 @@ class TestAppQrCodes:
         await client._poll_for_app_confirmation(POLL_URL, "ticket")
 
         assert events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["rejection", "unexpected", "transport", "cancelled"])
+async def test_app_login_failure_retires_qr_and_allows_same_payload_again(
+    failure, _no_poll_waiting
+):
+    shown = []
+    done = []
+    waiting = asyncio.Event()
+    polls = 0
+    network_error = httpx.ConnectError("offline transport failure")
+
+    async def endpoint(request):
+        nonlocal polls
+        if request.url.path.endswith("/next"):
+            return httpx.Response(
+                200, json={"errors": [], "nextAuthenticator": _authenticator("APP", "app-session")}
+            )
+        if request.url.path.endswith("/init-auth"):
+            polls = 0
+            return httpx.Response(200, json={"pollUrl": POLL_URL, "ticket": "ticket"})
+        polls += 1
+        if polls == 1:
+            return httpx.Response(200, json=_tqr())
+        if failure == "rejection":
+            return httpx.Response(403, json={})
+        if failure == "unexpected":
+            return httpx.Response(200, json={"status": "rejected"})
+        if failure == "transport":
+            raise network_error
+        waiting.set()
+        await asyncio.Event().wait()
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(endpoint)) as http:
+        client = BrowserClient(
+            "client-hash",
+            SESSION_ID,
+            http,
+            on_qr_codes=lambda *codes: shown.append(codes),
+            on_qr_done=lambda: done.append("done"),
+        )
+        for attempt in range(2):
+            task = asyncio.create_task(client.authenticate_with_app())
+            if failure == "cancelled":
+                await waiting.wait()
+                waiting.clear()
+                task.cancel()
+                expected = asyncio.CancelledError
+            else:
+                expected = httpx.ConnectError if failure == "transport" else MitIDError
+            with pytest.raises(expected) as exc:
+                await task
+            if failure == "transport":
+                assert exc.value is network_error
+            assert client.get_current_qr_codes() is None
+            assert client._qr_state is None
+            assert len(shown) == attempt + 1
+            assert done == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verified", [False, True])
+async def test_successful_app_login_announces_scan_once(verified, _no_poll_waiting):
+    responses = [_tqr(), *([_verified()] if verified else []), _confirmed()]
+    events = []
+
+    async def endpoint(request):
+        if request.url.path.endswith("/next"):
+            return httpx.Response(
+                200, json={"errors": [], "nextAuthenticator": _authenticator("APP", "app-session")}
+            )
+        if request.url.path.endswith("/init-auth"):
+            return httpx.Response(200, json={"pollUrl": POLL_URL, "ticket": "ticket"})
+        return httpx.Response(200, json=responses.pop(0))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(endpoint)) as http:
+        client = BrowserClient(
+            "client-hash",
+            SESSION_ID,
+            http,
+            on_qr_codes=lambda *codes: events.append("shown"),
+            on_qr_done=lambda: events.append("done"),
+        )
+        client._perform_srp_handshake = AsyncMock()
+        await client.authenticate_with_app()
+        assert events == ["shown", "done"]
+        assert client.get_current_qr_codes() is None
+        client._perform_srp_handshake.assert_awaited_once()

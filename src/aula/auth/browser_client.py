@@ -229,25 +229,30 @@ class BrowserClient:
 
     async def authenticate_with_app(self) -> None:
         """Authenticate using the MitID app (with QR code or OTP)."""
-        await self._select_authenticator("APP")
+        try:
+            await self._select_authenticator("APP")
 
-        r = await self._client.post(f"{self._app_auth_url()}/init-auth", json={})
-        if not r.is_success:
-            raise MitIDError(f"Failed to request app login: HTTP {r.status_code}")
+            r = await self._client.post(f"{self._app_auth_url()}/init-auth", json={})
+            if not r.is_success:
+                raise MitIDError(f"Failed to request app login: HTTP {r.status_code}")
 
-        data = r.json()
-        if data.get("errorCode") == "auth.codeapp.authentication.parallel_sessions_detected":
-            raise MitIDError(
-                "Parallel app sessions detected. Please wait a few minutes before trying again."
-            )
+            data = r.json()
+            if data.get("errorCode") == "auth.codeapp.authentication.parallel_sessions_detected":
+                raise MitIDError(
+                    "Parallel app sessions detected. Please wait a few minutes before trying again."
+                )
 
-        poll_url = data["pollUrl"]
-        ticket = data["ticket"]
-        self.status_message = "Login request has been made, open your MitID app now"
-        _LOGGER.info("Waiting for MitID app approval")
+            poll_url = data["pollUrl"]
+            ticket = data["ticket"]
+            self.status_message = "Login request has been made, open your MitID app now"
+            _LOGGER.info("Waiting for MitID app approval")
 
-        response, response_signature = await self._poll_for_app_confirmation(poll_url, ticket)
-        await self._perform_srp_handshake(response, response_signature)
+            response, response_signature = await self._poll_for_app_confirmation(poll_url, ticket)
+            await self._perform_srp_handshake(response, response_signature)
+        finally:
+            self._qr_state = None
+            self.qr1 = None
+            self.qr2 = None
 
     async def authenticate_with_token_and_password(self, token_digits: str, password: str) -> None:
         """Authenticate using a MitID hardware token (TOTP) and password."""
