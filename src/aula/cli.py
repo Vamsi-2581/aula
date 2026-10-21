@@ -955,7 +955,7 @@ async def messages(ctx, limit, unread, search, folders):
                         institution_codes.append(str(code))
 
             try:
-                results = await client.search_messages(
+                search_result = await client.search_messages_result(
                     text=search,
                     institution_profile_ids=prof.institution_profile_ids,
                     institution_codes=institution_codes,
@@ -965,11 +965,28 @@ async def messages(ctx, limit, unread, search, folders):
                 print_error(f"searching messages: {e}")
                 return
 
-            if output_json(ctx, [dict(m) for m in results]):
+            results = search_result.items
+            if output_json(
+                ctx,
+                {
+                    "items": [dict(m) for m in results],
+                    "complete": search_result.complete,
+                    "termination_reason": search_result.termination_reason,
+                },
+            ):
+                if not search_result.complete:
+                    ctx.exit(1)
                 return
+
+            if not search_result.complete:
+                click.echo(
+                    f"Incomplete message search: {search_result.termination_reason}", err=True
+                )
 
             if not results:
                 print_empty("messages")
+                if not search_result.complete:
+                    ctx.exit(1)
                 return
 
             print_heading(f'Messages: "{search}"')
@@ -985,6 +1002,8 @@ async def messages(ctx, limit, unread, search, folders):
 
                 if i < len(results) - 1:
                     click.echo()
+            if not search_result.complete:
+                ctx.exit(1)
             return
 
         try:
@@ -2710,6 +2729,7 @@ async def download_images(ctx, output, since, source, tags):
 
         total_downloaded = 0
         total_skipped = 0
+        message_issues: list[str] = []
         on_progress = click.echo if not is_json else lambda _msg: None
 
         if source in ("all", "gallery"):
@@ -2757,6 +2777,7 @@ async def download_images(ctx, output, since, source, tags):
                 output_path,
                 cutoff,
                 on_progress=on_progress,
+                on_incomplete=message_issues.append,
             )
             if not is_json:
                 click.echo(f"  Downloaded: {dl}")
@@ -2765,12 +2786,19 @@ async def download_images(ctx, output, since, source, tags):
             total_downloaded += dl
             total_skipped += sk
 
-        if output_json(ctx, {"downloaded": total_downloaded, "skipped": total_skipped}):
+        report: dict[str, object] = {"downloaded": total_downloaded, "skipped": total_skipped}
+        if source in ("all", "messages"):
+            report["message_export"] = {"complete": not message_issues, "issues": message_issues}
+        if output_json(ctx, report):
+            if message_issues:
+                ctx.exit(1)
             return
 
         click.echo("Total")
         click.echo(f"  Downloaded: {total_downloaded}")
         click.echo(f"  Skipped: {total_skipped}")
+        if message_issues:
+            ctx.exit(1)
 
 
 @cli.command("library:status")

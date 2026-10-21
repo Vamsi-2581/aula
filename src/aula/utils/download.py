@@ -269,20 +269,29 @@ async def download_message_images(
     output: Path,
     cutoff: date,
     on_progress: ProgressCallback | None = None,
+    on_incomplete: ProgressCallback | None = None,
 ) -> tuple[int, int]:
     """Download attachments from messages using server-side search filtering.
 
-    Returns (downloaded_count, skipped_count).
+    Returns (downloaded_count, skipped_count). Incomplete pagination is logged,
+    sent to on_progress, and reported through on_incomplete when provided.
     """
     downloaded = 0
     skipped = 0
     archive = _Archive(output)
 
+    def incomplete(reason: str) -> None:
+        _LOGGER.warning("Incomplete message export: %s", reason)
+        if on_progress:
+            on_progress(f"Incomplete message export: {reason}")
+        if on_incomplete:
+            on_incomplete(reason)
+
     if on_progress:
         on_progress("Searching for messages with attachments...")
 
     try:
-        search_results = await client.search_messages(
+        search_result = await client.search_messages_result(
             children_institution_profile_ids,
             institution_codes,
             from_date=cutoff,
@@ -290,7 +299,12 @@ async def download_message_images(
         )
     except Exception:
         _LOGGER.warning("Failed to search messages", exc_info=True)
+        incomplete("search:request_failed")
         return downloaded, skipped
+
+    if not search_result.complete:
+        incomplete(f"search:{search_result.termination_reason}")
+    search_results = search_result.items
 
     # Deduplicate by thread ID (search may return multiple results per thread)
     threads: dict[str, dict] = {}
@@ -319,10 +333,15 @@ async def download_message_images(
         thread_dir = output / "messages" / folder_name
 
         try:
-            messages = await client.get_all_messages_for_thread(thread_id)
+            message_result = await client.get_all_messages_for_thread_result(thread_id)
         except Exception:
             _LOGGER.warning("Failed to fetch messages for thread '%s'", subject, exc_info=True)
+            incomplete(f"thread:{thread_id}:request_failed")
             continue
+
+        if not message_result.complete:
+            incomplete(f"thread:{thread_id}:{message_result.termination_reason}")
+        messages = message_result.items
 
         for msg in messages:
             # Filter messages by cutoff date

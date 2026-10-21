@@ -7,6 +7,7 @@ import pytest
 
 from aula.models.attachment import Attachment
 from aula.models.message import Message
+from aula.models.pagination import PaginationResult
 from aula.utils.download import (
     _parse_date_str,
     download_gallery_images,
@@ -56,6 +57,17 @@ def _make_mock_client():
     client.get_posts = AsyncMock(return_value=[])
     client.search_messages = AsyncMock(return_value=[])
     client.get_all_messages_for_thread = AsyncMock(return_value=[])
+
+    async def search_result(*args, **kwargs):
+        return PaginationResult(await client.search_messages(*args, **kwargs), True, "exhausted")
+
+    async def thread_result(*args, **kwargs):
+        return PaginationResult(
+            await client.get_all_messages_for_thread(*args, **kwargs), True, "exhausted"
+        )
+
+    client.search_messages_result = AsyncMock(side_effect=search_result)
+    client.get_all_messages_for_thread_result = AsyncMock(side_effect=thread_result)
     client.download_file = AsyncMock(return_value=b"image-data")
     return client
 
@@ -423,3 +435,41 @@ async def test_archive_keeps_collisions_and_reruns_by_identity(source, tmp_path)
     client.download_file.reset_mock()
     assert await run() == (0, 2)
     client.download_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_message_export_reports_incomplete_search_without_changing_tuple(tmp_path):
+    client = _make_mock_client()
+    client.search_messages_result.side_effect = None
+    client.search_messages_result.return_value = PaginationResult([], False, "no_progress")
+    issues = []
+    progress = []
+    result = await download_message_images(
+        client,
+        [100],
+        ["INST"],
+        tmp_path,
+        date(2026, 1, 1),
+        on_progress=progress.append,
+        on_incomplete=issues.append,
+    )
+    assert result == (0, 0)
+    assert issues == ["search:no_progress"]
+    assert any("Incomplete message export" in line for line in progress)
+
+
+@pytest.mark.asyncio
+async def test_message_export_reports_incomplete_thread_read(tmp_path):
+    client = _make_mock_client()
+    client.search_messages.return_value = [
+        Message(id="m", content_html="", _raw={"thread": {"id": "t", "subject": "Example"}})
+    ]
+    client.get_all_messages_for_thread_result.side_effect = None
+    client.get_all_messages_for_thread_result.return_value = PaginationResult(
+        [], False, "max_pages"
+    )
+    issues = []
+    assert await download_message_images(
+        client, [100], ["INST"], tmp_path, date(2026, 1, 1), on_incomplete=issues.append
+    ) == (0, 0)
+    assert issues == ["thread:t:max_pages"]
