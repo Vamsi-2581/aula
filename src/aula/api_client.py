@@ -283,6 +283,17 @@ class AulaApiClient:
             api_method = _extract_api_method(url, params)
             self._raise_for_sub_code(sub_code, api_method)
 
+        if url.startswith(API_URL):
+            body = response.json()
+            status = body.get("status") if isinstance(body, dict) else None
+            if isinstance(status, dict) and status.get("code") is not None:
+                code = status["code"]
+                if code != 0:
+                    api_method = _extract_api_method(url, params) or "unknown method"
+                    raise HttpRequestError(
+                        f"Aula rejected {api_method} (status code {code})", response.status_code
+                    )
+
         return response
 
     async def _refresh_authentication(
