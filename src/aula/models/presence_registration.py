@@ -1,7 +1,7 @@
-import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..utils.diagnostics import credential_logger
 from .base import AulaDataClass
 from .presence import (
     PresenceDashboard,
@@ -10,7 +10,7 @@ from .presence import (
     PresenceState,
 )
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = credential_logger(__name__)
 
 
 @dataclass

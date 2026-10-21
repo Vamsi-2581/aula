@@ -66,11 +66,12 @@ from .models import (
     merge_duplicate_lessons,
 )
 from .models.meeting_booking import meeting_bookings
+from .utils.diagnostics import credential_logger, redact_credentials
 from .utils.mapping import get_in
 from .widgets import AulaWidgetsClient
 
 # Logger
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = credential_logger(__name__)
 
 # Safety limit for paginated requests to prevent infinite loops
 MAX_PAGES = 100
@@ -92,6 +93,7 @@ def _extract_api_method(url: str, params: dict[str, Any] | None) -> str | None:
 
 
 def _compact_payload_for_log(payload: Any, *, max_chars: int = 4000) -> str:
+    payload = redact_credentials(payload)
     try:
         rendered = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
     except TypeError, ValueError:

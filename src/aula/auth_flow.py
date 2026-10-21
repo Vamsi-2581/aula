@@ -9,7 +9,6 @@ Provides two entry points:
   load cached tokens) and return a ready client.  Used by the CLI.
 """
 
-import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -24,8 +23,9 @@ from .const import AUTH_BASE_URL, CSRF_TOKEN_COOKIE, OAUTH_CLIENT_ID, OAUTH_TOKE
 from .http import AulaAuthenticationError, HttpClient
 from .http_httpx import HttpxHttpClient
 from .token_storage import TokenStorage
+from .utils.diagnostics import credential_logger
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = credential_logger(__name__)
 
 # Proactive token refresh buffer (seconds). Tokens are considered expired this
 # many seconds before their actual expiry to prevent mid-request failures.
