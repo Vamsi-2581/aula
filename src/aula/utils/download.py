@@ -1,10 +1,13 @@
 """Download orchestration for gallery, post, and message images."""
 
+import hashlib
+import json
 import logging
 import re
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from ..api_client import AulaApiClient
 from ..models.attachment import parse_attachments
@@ -15,6 +18,62 @@ _LOGGER = logging.getLogger(__name__)
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
 
 ProgressCallback = Callable[[str], object]
+
+
+class _Archive:
+    """Remember source identity independently of display names and signed URLs."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.manifest = root / ".aula-archive.json"
+        self.files: dict[str, str] = (
+            json.loads(self.manifest.read_text()) if self.manifest.exists() else {}
+        )
+
+    async def save(
+        self,
+        client: AulaApiClient,
+        folder: Path,
+        filename: str,
+        url: str,
+        source: tuple,
+        attachment_id: object = None,
+        file_id: object = None,
+    ) -> bool:
+        """Return True after downloading, False only for a recorded existing export."""
+        # Stable IDs take precedence; query strings may rotate on every read.
+        parts = urlsplit(url)
+        fallback = (filename, urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")))
+        identity = (
+            (*source, attachment_id, file_id) if attachment_id or file_id else (*source, fallback)
+        )
+        key = hashlib.sha256(json.dumps(identity, default=str).encode()).hexdigest()
+        recorded = self.files.get(key)
+        if recorded:
+            dest = self.root / recorded
+            if not dest.resolve().is_relative_to(self.root.resolve()):
+                raise ValueError("Archive manifest contains a path outside the output directory")
+            if dest.is_file():
+                return False
+        else:
+            dest = folder / (sanitize_filename(filename) or "attachment")
+
+        # A legacy file or another attachment is never proof of this export.
+        original = dest
+        suffix = 0
+        while dest.exists():
+            suffix += 1
+            dest = original.with_name(f"{original.stem}-{key[:12]}-{suffix}{original.suffix}")
+
+        data = await client.download_file(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("xb") as file:
+            file.write(data)
+        self.files[key] = str(dest.relative_to(self.root))
+        temporary = self.manifest.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(self.files, indent=2))
+        temporary.replace(self.manifest)
+        return True
 
 
 def sanitize_filename(name: str) -> str:
@@ -44,6 +103,7 @@ async def download_gallery_images(
     """
     downloaded = 0
     skipped = 0
+    archive = _Archive(output)
 
     if on_progress:
         on_progress("Fetching album list...")
@@ -104,16 +164,19 @@ async def download_gallery_images(
             if not url:
                 continue
 
-            dest = album_dir / sanitize_filename(filename)
-            if dest.exists():
-                skipped += 1
-                continue
-
             try:
-                data = await client.download_file(url)
-                album_dir.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(data)
-                downloaded += 1
+                if await archive.save(
+                    client,
+                    album_dir,
+                    filename,
+                    url,
+                    ("gallery", album_id),
+                    pic.get("id"),
+                    file_info.get("id"),
+                ):
+                    downloaded += 1
+                else:
+                    skipped += 1
             except Exception:
                 _LOGGER.warning("Failed to download %s", url, exc_info=True)
 
@@ -133,6 +196,7 @@ async def download_post_images(
     """
     downloaded = 0
     skipped = 0
+    archive = _Archive(output)
 
     if on_progress:
         on_progress("Fetching posts...")
@@ -179,16 +243,19 @@ async def download_post_images(
             if not url or not filename:
                 continue
 
-            dest = post_dir / sanitize_filename(filename)
-            if dest.exists():
-                skipped += 1
-                continue
-
             try:
-                data = await client.download_file(url)
-                post_dir.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(data)
-                downloaded += 1
+                if await archive.save(
+                    client,
+                    post_dir,
+                    filename,
+                    url,
+                    ("posts", post.id),
+                    attachment.id,
+                    attachment.file.id,
+                ):
+                    downloaded += 1
+                else:
+                    skipped += 1
             except Exception:
                 _LOGGER.warning("Failed to download %s", url, exc_info=True)
 
@@ -209,6 +276,7 @@ async def download_message_images(
     """
     downloaded = 0
     skipped = 0
+    archive = _Archive(output)
 
     if on_progress:
         on_progress("Searching for messages with attachments...")
@@ -273,16 +341,19 @@ async def download_message_images(
                 if not url or not filename:
                     continue
 
-                dest = thread_dir / sanitize_filename(filename)
-                if dest.exists():
-                    skipped += 1
-                    continue
-
                 try:
-                    data = await client.download_file(url)
-                    thread_dir.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(data)
-                    downloaded += 1
+                    if await archive.save(
+                        client,
+                        thread_dir,
+                        filename,
+                        url,
+                        ("messages", thread_id, msg.get("id") or msg.get("sendDateTime")),
+                        attachment.id,
+                        attachment.file.id,
+                    ):
+                        downloaded += 1
+                    else:
+                        skipped += 1
                 except Exception:
                     _LOGGER.warning("Failed to download %s", url, exc_info=True)
 

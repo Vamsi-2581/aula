@@ -252,6 +252,12 @@ returning a partial list.
 | `aula consents` | Consent responses |
 | `aula download-images` | Download images from gallery/posts/messages |
 
+Image exports keep an `.aula-archive.json` manifest in the output directory to
+recognize previously downloaded attachments by source identity. Distinct files
+with equal names receive separate paths. Keep the manifest with the archive for
+reruns. Existing files without manifest entries are preserved; the attachment is
+downloaded beside them because its identity cannot be established from its name.
+
 ### Widgets
 
 | Command | Description |

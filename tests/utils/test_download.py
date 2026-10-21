@@ -98,8 +98,8 @@ class TestDownloadGalleryImages:
         client.get_album_pictures.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_skips_existing_files(self, tmp_path):
-        """Existing files are counted as skipped."""
+    async def test_preserves_untracked_legacy_files(self, tmp_path):
+        """A legacy filename cannot prove which source attachment was exported."""
         client = _make_mock_client()
         client.get_gallery_albums.return_value = [
             {"id": 1, "title": "Trip", "creationDate": "2026-03-01T12:00:00"},
@@ -117,9 +117,10 @@ class TestDownloadGalleryImages:
             client, [100], tmp_path, date(2026, 1, 1)
         )
 
-        assert downloaded == 0
-        assert skipped == 1
-        client.download_file.assert_not_awaited()
+        assert downloaded == 1
+        assert skipped == 0
+        assert (dest_dir / "pic.jpg").read_bytes() == b"existing"
+        assert len(list(dest_dir.glob("*.jpg"))) == 2
 
     @pytest.mark.asyncio
     async def test_tag_filtering(self, tmp_path):
@@ -345,3 +346,80 @@ class TestDownloadMessageImages:
 
         assert downloaded == 1
         assert (tmp_path / "messages" / "20260301 Photos" / "img.jpg").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["gallery", "posts", "messages"])
+async def test_archive_keeps_collisions_and_reruns_by_identity(source, tmp_path):
+    client = _make_mock_client()
+    client.download_file.side_effect = lambda url: url.split("?")[0].encode()
+    records = []
+    for identifier in (1, 2):
+        records.append(
+            {
+                "id": identifier,
+                "file": {
+                    "id": identifier,
+                    "name": "same.jpg",
+                    "url": f"https://example.test/{identifier}?signature=old",
+                },
+            }
+        )
+
+    async def run():
+        if source == "gallery":
+            client.get_gallery_albums.return_value = [
+                {
+                    "id": i,
+                    "title": "Same/title" if i == 1 else "Same:title",
+                    "creationDate": "2026-03-01",
+                }
+                for i in (1, 2)
+            ]
+            client.get_album_pictures.side_effect = lambda ids, album_id: [
+                record for record in records if record["id"] == album_id
+            ]
+            return await download_gallery_images(client, [100], tmp_path, date(2026, 1, 1))
+        if source == "posts":
+            posts = [
+                MagicMock(
+                    id=i,
+                    title="Same/title" if i == 1 else "Same:title",
+                    timestamp=datetime(2026, 3, 1),
+                    attachments=[Attachment.from_dict({"id": i, "media": record})],
+                )
+                for record in records
+                for i in [record["id"]]
+            ]
+            client.get_posts.side_effect = [posts, []]
+            return await download_post_images(client, [100], tmp_path, date(2026, 1, 1))
+        client.search_messages.return_value = [
+            Message(
+                id="search",
+                content_html="",
+                _raw={
+                    "thread": {"id": "thread", "subject": "Same"},
+                    "searchMessage": {"sendDateTime": "2026-03-01"},
+                },
+            )
+        ]
+        client.get_all_messages_for_thread.return_value = [
+            {"id": i, "sendDateTime": "2026-03-01", "hasAttachments": True, "attachments": [record]}
+            for record in records
+            for i in [record["id"]]
+        ]
+        return await download_message_images(client, [100], ["INST"], tmp_path, date(2026, 1, 1))
+
+    assert await run() == (2, 0)
+    files = list(tmp_path.rglob("*.jpg"))
+    assert len(files) == 2
+    assert {file.read_bytes() for file in files} == {
+        b"https://example.test/1",
+        b"https://example.test/2",
+    }
+    records.reverse()
+    for record in records:
+        record["file"]["url"] = record["file"]["url"].replace("old", "new")
+    client.download_file.reset_mock()
+    assert await run() == (0, 2)
+    client.download_file.assert_not_awaited()
