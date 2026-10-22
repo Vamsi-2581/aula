@@ -25,7 +25,7 @@ from aula.const import (
     WIDGET_MIN_UDDANNELSE_TASKS,
     WIDGET_MIN_UDDANNELSE_UGEPLAN,
 )
-from aula.http import AulaNotFoundError
+from aula.http import AulaNotFoundError, HttpResponse
 from aula.widgets import EasyIQChildNotInPortal, EasyIQWrongChildSession
 
 EASYIQ_CALENDAR_URL = f"{EASYIQ_PORTAL}{EASYIQ_CALENDAR_PATH}"
@@ -1631,6 +1631,67 @@ class TestEasyiqProtocolCorrectIdentifier:
             ("switch:9001", "read:astr8360"),
             ("switch:9002", "read:kris37r9"),
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reader", ["get_easyiq_calendar_events", "get_easyiq_homework_events"])
+    @pytest.mark.parametrize(
+        "bootstrap_responses",
+        [
+            [HttpResponse(500)],
+            [HttpResponse(200, {}), HttpResponse(500)],
+            [HttpResponse(200, {}), HttpResponse(200, {"Children": []})],
+            [HttpResponse(200, {}), HttpResponse(200, {"Children": [{"Name": "Child"}]})],
+        ],
+        ids=["authentication-failed", "children-failed", "empty-children", "unidentified-children"],
+    )
+    async def test_unidentified_children_refuse_multi_child_reads(
+        self, reader, bootstrap_responses
+    ):
+        http_client = AsyncMock()
+        http_client.request.side_effect = [
+            HttpResponse(200, {"data": "token-easy"}),
+            *bootstrap_responses,
+            HttpResponse(200, {"data": "token-easy"}),
+            HttpResponse(200, [{"ItemType": 9, "Title": "Sibling's lesson"}]),
+        ]
+        client = AulaApiClient(http_client=http_client, access_token="token")
+
+        with pytest.raises(RuntimeError, match="portal did not identify the children"):
+            await getattr(client.widgets, reader)(
+                week="2026-W09",
+                institution_filter=["inst-1"],
+                child_profile_id="4242",
+                child_user_id="astr8360",
+                all_child_user_ids=["astr8360", "kris37r9"],
+                guardian_login="guardian-1",
+            )
+
+        requested_urls = [request.args[1] for request in http_client.request.await_args_list]
+        assert EASYIQ_CALENDAR_URL not in requested_urls
+        assert EASYIQ_HOMEWORK_URL not in requested_urls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reader", ["get_easyiq_calendar_events", "get_easyiq_homework_events"])
+    async def test_failed_bootstrap_preserves_single_child_reads(self, reader):
+        http_client = AsyncMock()
+        http_client.request.side_effect = [
+            HttpResponse(200, {"data": "token-easy"}),
+            HttpResponse(500),
+            HttpResponse(200, {"data": "token-easy"}),
+            HttpResponse(200, [{"ItemType": 9, "Title": "Dansk"}]),
+        ]
+        client = AulaApiClient(http_client=http_client, access_token="token")
+
+        events = await getattr(client.widgets, reader)(
+            week="2026-W09",
+            institution_filter=["inst-1"],
+            child_profile_id="4242",
+            child_user_id="astr8360",
+            all_child_user_ids=["astr8360"],
+            guardian_login="guardian-1",
+        )
+
+        assert [event.title for event in events] == ["Dansk"]
 
     @pytest.mark.asyncio
     async def test_no_switch_when_the_bootstrap_resolved_no_children(self, client):

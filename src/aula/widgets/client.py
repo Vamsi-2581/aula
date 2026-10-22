@@ -323,7 +323,8 @@ class AulaWidgetsClient:
 
         Best-effort: a failure is logged rather than raised, leaving the
         identifier guessing in :meth:`easyiq_identifier_variants` as a
-        fallback for institutions this flow does not suit.
+        fallback for single-child accounts at institutions this flow does not
+        suit. Multi-child reads require the portal to identify the children.
 
         Safe to await concurrently: callers reading several weeks or children
         at once share the one bootstrap rather than each making their own.
@@ -590,7 +591,7 @@ class AulaWidgetsClient:
         like valid data.
 
         Only when the bootstrap failed outright, leaving no children known,
-        does this fall back to the old behaviour of trying the known
+        does a single-child account fall back to trying the known
         Aula-derived identifier combinations in turn and remembering the one
         that returns rows. That path cannot select a child and is kept only
         so single-child institutions the bootstrap does not suit keep working.
@@ -611,6 +612,11 @@ class AulaWidgetsClient:
         easyiq_child_id = self.resolve_easyiq_child_id(child_user_id)
         if easyiq_child_id is None and self._easyiq_children_known:
             raise EasyIQChildNotInPortal(f"EasyIQ's portal lists no child matching {child_user_id}")
+        if not self._easyiq_children_known and len(all_child_user_ids) > 1:
+            raise RuntimeError(
+                "EasyIQ's portal did not identify the children; "
+                "cannot safely read data for an account with multiple children"
+            )
 
         token = await self._get_bearer_token(widget_id)
 
