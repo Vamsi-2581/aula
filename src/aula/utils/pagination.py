@@ -29,14 +29,21 @@ class PaginationState:
         else:
             self.total = total
 
-    def add(self, rows: list[dict]) -> bool:
+    def add(
+        self, rows: list[dict], *, identity_path: tuple[str, ...] = ("id",)
+    ) -> bool:
         signature = json.dumps(rows, sort_keys=True, default=str)
         if signature in self.seen_pages:
             return False
         self.seen_pages.add(signature)
         before = len(self.items)
         for row in rows:
-            identifier = row.get("id")
+            identifier: object = row
+            for part in identity_path:
+                if not isinstance(identifier, dict):
+                    identifier = None
+                    break
+                identifier = identifier.get(part)
             if isinstance(identifier, (str, int)) and str(identifier):
                 key = str(identifier)
                 if key in self.seen_ids:
