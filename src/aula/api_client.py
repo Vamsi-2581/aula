@@ -1858,7 +1858,7 @@ class AulaApiClient:
         """Search messages with completeness metadata; limit is a positive page size."""
         if limit <= 0:
             raise ValueError("limit must be positive")
-        state = PaginationState()
+        state = PaginationState(id_path="searchMessage.id")
         offset = 0
         reason = "max_pages"
         for _page in range(MAX_PAGES):
