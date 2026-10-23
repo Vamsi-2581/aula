@@ -50,3 +50,16 @@ class Message(AulaDataClass):
             send_datetime=parse_api_datetime(data.get("sendDateTime")),
             _raw=data,
         )
+
+    @classmethod
+    def from_search_hit(cls, hit: dict[str, Any]) -> Message:
+        """Create a Message from one search.findMessage hit."""
+        found = hit["searchMessage"]
+        message = cls.from_dict(found)
+        if message.sender_name is None:
+            name, sep, rest = message.content_html.partition(": ")
+            if sep and name and "<" not in name and len(name) <= 60:
+                message.sender_name = name
+                message.content_html = rest
+        message._raw = hit
+        return message
