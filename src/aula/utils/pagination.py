@@ -39,7 +39,7 @@ class PaginationState:
         before = len(self.items)
         for row in rows:
             identifier = get_in(row, self.id_path)
-            if isinstance(identifier, (str, int)) and str(identifier):
+            if identifier:
                 key = str(identifier)
                 if key in self.seen_ids:
                     continue
